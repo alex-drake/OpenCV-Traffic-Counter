@@ -7,7 +7,7 @@ This project was carried out as part of the [Government Data Science Accelerator
 
 **Note that this code is currently a work in progress.**
 
-## Resources
+## Resources / Useful Reading
 * [Counting Cars Open CV (Dan Masek)](https://stackoverflow.com/a/36274515)
 * [Speed Tracking (Ian Dees)](https://github.com/iandees/speedtrack)
-* [SDC Vehicle Lane Detection](https://github.com/maxritter/SDC-Vehicle-Lane-Detection)
+* [SDC Vehicle Lane Detection (Max Ritter)](https://github.com/maxritter/SDC-Vehicle-Lane-Detection)
