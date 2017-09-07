@@ -12,6 +12,7 @@ import time
 import logging
 import math
 import csv
+import re
 
 # Vehicle_counter from Dan Maesks response on 
 # https://stackoverflow.com/questions/36254452/counting-cars-opencv-python-issue/36274515#36274515
@@ -19,6 +20,7 @@ import csv
 # for testing
 tracked_blobs = []
 tracked_conts = []
+t_retval = []
 
 # ============================================================================
 
@@ -27,6 +29,7 @@ class Vehicle(object):
         self.id = id
         self.positions = [position]
         self.frames_since_seen = 0
+        self.frames_seen = 0
         self.counted = False
 
     @property
@@ -36,6 +39,7 @@ class Vehicle(object):
     def add_position(self, new_position):
         self.positions.append(new_position)
         self.frames_since_seen = 0
+        self.frames_seen += 1
 
     def draw(self, output_image):
         for point in self.positions:
@@ -94,8 +98,13 @@ class VehicleCounter(object):
     @staticmethod
     def is_valid_vector(a):
         distance, angle = a
+        threshold_distance = 12.0
         #threshold_distance = max(10.0, -0.008 * angle**2 + 0.4 * angle + 25.0)
-        threshold_distance = max(10.0, -0.001 * angle**2 + 25.0)
+#        if angle > 0:
+#            threshold_distance = 0
+#        else:
+#            threshold_distance = max(8.0, -0.001*(angle + 90)**2 + 12.0)
+
         return (distance <= threshold_distance)
 
 
@@ -119,6 +128,7 @@ class VehicleCounter(object):
             
             if self.is_valid_vector(vector):
                 vehicle.add_position(centroid)
+                vehicle.frames_seen += 1
                 self.log.debug("Added match (%d, %d) to vehicle #%d. vector=(%0.2f,%0.2f)"
                     , centroid[0], centroid[1], vehicle.id, vector[0], vector[1])
                 return i
@@ -151,7 +161,8 @@ class VehicleCounter(object):
 
         # Count any uncounted vehicles that are past the divider
         for vehicle in self.vehicles:
-            if not vehicle.counted and (vehicle.last_position[1] > self.divider):
+            if not vehicle.counted and (vehicle.last_position[1] > self.divider) and (vehicle.frames_seen > 2):
+            #if not vehicle.counted and (vehicle.frames_seen > 2):    
                 self.vehicle_count += 1
                 vehicle.counted = True
                 self.log.debug("Counted vehicle #%d (total count=%d)."
@@ -163,7 +174,7 @@ class VehicleCounter(object):
                 vehicle.draw(output_image)
 
             cv2.putText(output_image, ("%02d" % self.vehicle_count), (142, 10)
-                , cv2.FONT_HERSHEY_PLAIN, 0.7, (127, 255, 255), 1)
+                , cv2.FONT_HERSHEY_PLAIN, 1, (127, 255, 255), 1)
 
         # Remove vehicles that have not been seen long enough
         removed = [ v.id for v in self.vehicles
@@ -178,17 +189,38 @@ class VehicleCounter(object):
 # ============================================================================
 
 # Video source
-cap = cv2.VideoCapture('/Users/datascience9/Veh Detection/TFL API/625_201708101116.mp4')
-# Default background (as clear as possible or pre-created avg frame!!)
-bg = "/Users/datascience9/Veh Detection/Sample Scripts/test_images/625_bg.jpg"
+inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201708101116.mp4'
+#inputFile = '/Users/datascience9/Veh Detection/RNC Data/1425_Tottenham.mp4'
+camera = re.match(r".*/(\d+)_.*", inputFile)
+camera = camera.group(1)
 
+# import video file
+cap = cv2.VideoCapture(inputFile)
+
+# Default background (as clear as possible or pre-created avg frame!!)
+try:
+    bg = "/Users/datascience9/Veh Detection/Sample Scripts/test_images/"+camera+"_bg.jpg"
+    default_bg = cv2.imread(bg)
+except TypeError:
+    avg = None
+
+if 'default_bg' in locals():
+    default_bg = cv2.cvtColor(default_bg, cv2.COLOR_BGR2HSV)
+    (_,avgSat,default_bg) = cv2.split(default_bg)
+    avg = default_bg.copy().astype("float")
+    #avgSat = avgSat.copy().astype("float")
+else:
+    avg = None
+
+  
 # get frame size
 frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # The cutoff for threshold. A lower number means smaller changes between
 # the average and current scene are more readily detected.
-THRESHOLD_SENSITIVITY = 18
+THRESHOLD_SENSITIVITY = 20
+t_retval.append(THRESHOLD_SENSITIVITY)
 # Blob size limit before we consider it for tracking.
 CONTOUR_WIDTH = 21
 CONTOUR_HEIGHT = 21
@@ -199,30 +231,22 @@ DEFAULT_AVERAGE_WEIGHT = 0.01
 INITIAL_AVERAGE_WEIGHT = DEFAULT_AVERAGE_WEIGHT / 50
 # The number of seconds a blob is allowed to sit around without having
 # any new blobs matching it.
-BLOB_TRACK_TIMEOUT = 1.2 #0.7
+BLOB_TRACK_TIMEOUT = 5#1.2 #0.7
 # Blob smoothing function, to join 'gaps' in cars
-SMOOTH = int(round((CONTOUR_WIDTH**0.5)/2,0))
+SMOOTH = max(2,int(round((CONTOUR_WIDTH**0.5)/2,0)))
 # Constants for drawing on the frame.
 LINE_THICKNESS = 1
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter('/Users/datascience9/Veh Detection/Outputs/625_output.mp4', fourcc, 20, (frame_w, frame_h))
-outblob = cv2.VideoWriter('/Users/datascience9/Veh Detection/Outputs/625_outblob.mp4', fourcc, 20, (frame_w, frame_h))
-diffop = cv2.VideoWriter('/Users/datascience9/Veh Detection/Outputs/625_outdiff.mp4', fourcc, 20, (frame_w, frame_h))
-
-
-if bg is None:
-    avg = None
-else:
-    # create a baseline background average
-    default_bg = cv2.imread(bg)
-    default_bg = cv2.cvtColor(default_bg, cv2.COLOR_BGR2HSV)
-    (_,_,default_bg) = cv2.split(default_bg)
-    avg = default_bg.copy().astype("float")
+out = '/Users/datascience9/Veh Detection/Outputs/'+camera+'_output.mp4'
+outblob = '/Users/datascience9/Veh Detection/Outputs/'+camera+'_outblob.mp4'
+diffop = '/Users/datascience9/Veh Detection/Outputs/'+camera+'_outdiff.mp4'
+out = cv2.VideoWriter(out, fourcc, 20, (frame_w, frame_h))
+outblob = cv2.VideoWriter(outblob, fourcc, 20, (frame_w, frame_h))
+diffop = cv2.VideoWriter(diffop, fourcc, 20, (frame_w, frame_h))
 
 # A list of "tracked blobs".
 blobs = []
-#tracked_blobs = []
 car_counter = None  # will be created later
 frame_no = 0
 
@@ -241,13 +265,15 @@ while(1):
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
         # only use the Value channel of the frame
-        (_,_,grayFrame) = cv2.split(frame)
-        grayFrame = cv2.GaussianBlur(grayFrame, (21, 21), 0)
-        
+        (_,satFrame,grayFrame) = cv2.split(frame)
+        #grayFrame = cv2.GaussianBlur(grayFrame, (21, 21), 0)
+        grayFrame = cv2.bilateralFilter(grayFrame, 11, 21, 21)
+        #satFrame = cv2.bilateralFilter(satFrame, 11, 21, 21)
+
         if avg is None:
             # Set up the average if this is the first time through.
             avg = grayFrame.copy().astype("float")
-            #avg = default_bg.copy().astype("float")
+            #avgSat = satFrame.copy().astype("float")
             continue
         
         # Build the average scene image by accumulating this frame
@@ -256,37 +282,62 @@ while(1):
             def_wt = INITIAL_AVERAGE_WEIGHT
         else:
             def_wt = DEFAULT_AVERAGE_WEIGHT
+            
         cv2.accumulateWeighted(grayFrame, avg, def_wt)
-        cv2.imshow("gray_average", cv2.convertScaleAbs(avg))
+        #cv2.imshow("gray_average", cv2.convertScaleAbs(avg))
+        #cv2.accumulateWeighted(satFrame, avgSat, def_wt)
         
         # export averaged background for use in next video feed run
         if frame_no > 250:
             grayOp = cv2.cvtColor(cv2.convertScaleAbs(avg), cv2.COLOR_GRAY2BGR)
-            cv2.imwrite("/Users/datascience9/Veh Detection/Sample Scripts/test_images/625_bg.jpg",
-                        grayOp)
+            backOut = "/Users/datascience9/Veh Detection/Sample Scripts/test_images/"+camera+"_bg.jpg"
+            cv2.imwrite(backOut, grayOp)
         
         # Compute the grayscale difference between the current grayscale frame and
         # the average of the scene.
         differenceFrame = cv2.absdiff(grayFrame, cv2.convertScaleAbs(avg))
+        # blur the difference image
+        differenceFrame = cv2.GaussianBlur(differenceFrame, (5, 5), 0)
+        #differenceFrame = cv2.bilateralFilter(differenceFrame, 11, 33, 33)
         cv2.imshow("difference", differenceFrame)
         diffout = cv2.cvtColor(differenceFrame, cv2.COLOR_GRAY2BGR)
         diffop.write(diffout)
         
+        edge = cv2.Canny(differenceFrame, 80, 200, 5)
+        cv2.imshow("edge", edge)
+#        satFrame = cv2.absdiff(satFrame, cv2.convertScaleAbs(avgSat))
+#        satFrame = cv2.GaussianBlur(satFrame, (5, 5), 0)
+#
+#        _, satImg = cv2.threshold(satFrame, 0, 255,
+#                                    cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+#        cv2.imshow("satThresh",satImg)
+        
         # Apply a threshold to the difference: any pixel value above the sensitivity
         # value will be set to 255 and any pixel value below will be set to 0.
-        retval, thresholdImage = cv2.threshold(differenceFrame, THRESHOLD_SENSITIVITY, 
-                                               255, cv2.THRESH_BINARY)
+#        retval, thresholdImage = cv2.threshold(differenceFrame, THRESHOLD_SENSITIVITY, 
+#                                               255, cv2.THRESH_BINARY)
+        # get estimated otsu threshold level
+        retval, _ = cv2.threshold(differenceFrame, 0, 255,
+                                  cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+        # add to list of threshold levels
+        t_retval.append(retval)
+        
+        # apply threshold based on average threshold value so far
+        ret2, thresholdImage = cv2.threshold(differenceFrame, 
+                                             int(np.mean(t_retval)*0.9),
+                                             255, cv2.THRESH_BINARY)
         
         # We'll need to fill in the gaps to make a complete vehicle as windows
         # and other features can split them!
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (SMOOTH, SMOOTH))
         # Fill any small holes
-        closing = cv2.morphologyEx(thresholdImage, cv2.MORPH_CLOSE, kernel)
+        thresholdImage = cv2.morphologyEx(thresholdImage, cv2.MORPH_CLOSE, kernel)
+        
         # Remove noise
-        opening = cv2.morphologyEx(closing, cv2.MORPH_OPEN, kernel)
+        thresholdImage = cv2.morphologyEx(thresholdImage, cv2.MORPH_OPEN, kernel)
 
         # Dilate to merge adjacent blobs
-        thresholdImage = cv2.dilate(opening, kernel, iterations = 2)
+        thresholdImage = cv2.dilate(thresholdImage, kernel, iterations = 2)
         
         cv2.imshow("threshold", thresholdImage)
         threshout = cv2.cvtColor(thresholdImage, cv2.COLOR_GRAY2BGR)
@@ -356,15 +407,3 @@ cv2.line()
 cv2.destroyAllWindows()
 cap.release()
 out.release()
-
-keys = tracked_blobs[0].keys()
-with open('tracked_blobs.csv', 'w') as output_file:
-    dict_writer = csv.DictWriter(output_file, keys)
-    dict_writer.writeheader()
-    dict_writer.writerows(tracked_blobs)
-    
-keys = tracked_conts[0].keys()
-with open('tracked_conts.csv', 'w') as output_file:
-    dict_writer = csv.DictWriter(output_file, keys)
-    dict_writer.writeheader()
-    dict_writer.writerows(tracked_conts)
