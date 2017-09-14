@@ -13,6 +13,7 @@ import logging
 import math
 import csv
 import re
+from matplotlib import pyplot as plt
 
 # Vehicle_counter from Dan Maesks response on 
 # https://stackoverflow.com/questions/36254452/counting-cars-opencv-python-issue/36274515#36274515
@@ -31,10 +32,14 @@ class Vehicle(object):
         self.frames_since_seen = 0
         self.frames_seen = 0
         self.counted = False
+        self.vehicle_dir = 0
 
     @property
     def last_position(self):
         return self.positions[-1]
+    @property
+    def last_position2(self):
+        return self.positions[-2]
 
     def add_position(self, new_position):
         self.positions.append(new_position)
@@ -59,7 +64,7 @@ class VehicleCounter(object):
         self.vehicles = []
         self.next_vehicle_id = 0
         self.vehicle_count = 0
-        self.max_unseen_frames = 7
+        self.max_unseen_frames = 10
 
 
     @staticmethod
@@ -68,7 +73,7 @@ class VehicleCounter(object):
 
         Angle ranges from -180 to 180 degrees.
         Vector with angle 0 points straight down on the image.
-        Values increase in clockwise direction.
+        Values decrease in clockwise direction.
         """
         dx = float(b[0] - a[0])
         dy = float(b[1] - a[1])
@@ -92,20 +97,18 @@ class VehicleCounter(object):
             else:
                 angle = 180.0        
 
-        return distance, angle 
+        return distance, angle, dx, dy 
 
 
     @staticmethod
-    def is_valid_vector(a):
-        distance, angle = a
+    def is_valid_vector(a, b):
+        # vector is only valid if threshold distance is less than 12
+        # and if vector deviation is less than 30 or greater than 330 degs
+        distance, angle, _, _ = a
+        dev = b
         threshold_distance = 12.0
-        #threshold_distance = max(10.0, -0.008 * angle**2 + 0.4 * angle + 25.0)
-#        if angle > 0:
-#            threshold_distance = 0
-#        else:
-#            threshold_distance = max(8.0, -0.001*(angle + 90)**2 + 12.0)
-
         return (distance <= threshold_distance)
+        #return ((distance <= threshold_distance) & ((dev <= 20) or (dev >= 340)))
 
 
     def update_vehicle(self, vehicle, matches):
@@ -115,20 +118,40 @@ class VehicleCounter(object):
             
             # store the vehicle data
             vector = self.get_vector(vehicle.last_position, centroid)
+            
+            # only measure angle deviation if we have enough points
+            if vehicle.frames_seen > 2:
+                prevVector = self.get_vector(vehicle.last_position2, vehicle.last_position)
+                angleDev = abs(prevVector[1]-vector[1])
+            else:
+                angleDev = 0
+                
             b = dict(
                     id = vehicle.id,
                     center_x = centroid[0],
                     center_y = centroid[1],
                     vector_x = vector[0],
                     vector_y = vector[1],
+                    dx = vector[2],
+                    dy = vector[3],
                     counted = vehicle.counted,
-                    frame_number = frame_no
+                    frame_number = frame_no,
+                    angle_dev = angleDev
                     )
+            
             tracked_blobs.append(b)
             
-            if self.is_valid_vector(vector):
+            # check validity
+            if self.is_valid_vector(vector, angleDev):    
                 vehicle.add_position(centroid)
                 vehicle.frames_seen += 1
+                # check vehicle direction
+                if vector[3] > 0:
+                    # positive value means vehicle is moving DOWN
+                    vehicle.vehicle_dir = 1
+                elif vector[3] < 0:
+                    # negative value means vehicle is moving UP
+                    vehicle.vehicle_dir = -1
                 self.log.debug("Added match (%d, %d) to vehicle #%d. vector=(%0.2f,%0.2f)"
                     , centroid[0], centroid[1], vehicle.id, vector[0], vector[1])
                 return i
@@ -161,8 +184,8 @@ class VehicleCounter(object):
 
         # Count any uncounted vehicles that are past the divider
         for vehicle in self.vehicles:
-            if not vehicle.counted and (vehicle.last_position[1] > self.divider) and (vehicle.frames_seen > 2):
-            #if not vehicle.counted and (vehicle.frames_seen > 2):    
+            if not vehicle.counted and (((vehicle.last_position[1] > self.divider) and (vehicle.vehicle_dir == 1)) or
+                                          ((vehicle.last_position[1] < self.divider) and (vehicle.vehicle_dir == -1))) and (vehicle.frames_seen > 6):
                 self.vehicle_count += 1
                 vehicle.counted = True
                 self.log.debug("Counted vehicle #%d (total count=%d)."
@@ -189,10 +212,13 @@ class VehicleCounter(object):
 # ============================================================================
 
 # Video source
-inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201708101116.mp4'
-#inputFile = '/Users/datascience9/Veh Detection/RNC Data/1425_Tottenham.mp4'
+inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201709141107.mp4'
+#inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201708101116.mp4'
 camera = re.match(r".*/(\d+)_.*", inputFile)
 camera = camera.group(1)
+
+#inputFile = 'https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00002.00625.mp4'
+#camera = inputFile[-7:-4]
 
 # import video file
 cap = cv2.VideoCapture(inputFile)
@@ -219,7 +245,7 @@ frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # The cutoff for threshold. A lower number means smaller changes between
 # the average and current scene are more readily detected.
-THRESHOLD_SENSITIVITY = 20
+THRESHOLD_SENSITIVITY = 40
 t_retval.append(THRESHOLD_SENSITIVITY)
 # Blob size limit before we consider it for tracking.
 CONTOUR_WIDTH = 21
@@ -266,14 +292,11 @@ while(1):
         
         # only use the Value channel of the frame
         (_,satFrame,grayFrame) = cv2.split(frame)
-        #grayFrame = cv2.GaussianBlur(grayFrame, (21, 21), 0)
         grayFrame = cv2.bilateralFilter(grayFrame, 11, 21, 21)
-        #satFrame = cv2.bilateralFilter(satFrame, 11, 21, 21)
 
         if avg is None:
             # Set up the average if this is the first time through.
             avg = grayFrame.copy().astype("float")
-            #avgSat = satFrame.copy().astype("float")
             continue
         
         # Build the average scene image by accumulating this frame
@@ -285,7 +308,6 @@ while(1):
             
         cv2.accumulateWeighted(grayFrame, avg, def_wt)
         #cv2.imshow("gray_average", cv2.convertScaleAbs(avg))
-        #cv2.accumulateWeighted(satFrame, avgSat, def_wt)
         
         # export averaged background for use in next video feed run
         if frame_no > 250:
@@ -303,14 +325,8 @@ while(1):
         diffout = cv2.cvtColor(differenceFrame, cv2.COLOR_GRAY2BGR)
         diffop.write(diffout)
         
-        edge = cv2.Canny(differenceFrame, 80, 200, 5)
-        cv2.imshow("edge", edge)
-#        satFrame = cv2.absdiff(satFrame, cv2.convertScaleAbs(avgSat))
-#        satFrame = cv2.GaussianBlur(satFrame, (5, 5), 0)
-#
-#        _, satImg = cv2.threshold(satFrame, 0, 255,
-#                                    cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-#        cv2.imshow("satThresh",satImg)
+#        edge = cv2.Canny(differenceFrame, 80, 200, 5)
+#        cv2.imshow("edge", edge)
         
         # Apply a threshold to the difference: any pixel value above the sensitivity
         # value will be set to 255 and any pixel value below will be set to 0.
@@ -338,6 +354,10 @@ while(1):
 
         # Dilate to merge adjacent blobs
         thresholdImage = cv2.dilate(thresholdImage, kernel, iterations = 2)
+        
+        masked_img = cv2.bitwise_and(frame, frame, mask = thresholdImage)
+        masked_img = cv2.cvtColor(masked_img, cv2.COLOR_HSV2BGR)
+        cv2.imshow("mask", masked_img)
         
         cv2.imshow("threshold", thresholdImage)
         threshout = cv2.cvtColor(thresholdImage, cv2.COLOR_GRAY2BGR)
@@ -407,3 +427,15 @@ cv2.line()
 cv2.destroyAllWindows()
 cap.release()
 out.release()
+
+#keys = tracked_blobs[0].keys()
+#with open('tracked_blobs2.csv', 'w') as output_file:
+#    dict_writer = csv.DictWriter(output_file, keys)
+#    dict_writer.writeheader()
+#    dict_writer.writerows(tracked_blobs)
+#    
+#keys = tracked_conts[0].keys()
+#with open('tracked_conts.csv', 'w') as output_file:
+#    dict_writer = csv.DictWriter(output_file, keys)
+#    dict_writer.writeheader()
+#    dict_writer.writerows(tracked_conts)
