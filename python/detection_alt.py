@@ -64,6 +64,8 @@ class VehicleCounter(object):
         self.vehicles = []
         self.next_vehicle_id = 0
         self.vehicle_count = 0
+        self.vehicle_LHS = 0
+        self.vehicle_RHS = 0
         self.max_unseen_frames = 10
 
 
@@ -188,6 +190,12 @@ class VehicleCounter(object):
                                           ((vehicle.last_position[1] < self.divider) and (vehicle.vehicle_dir == -1))) and (vehicle.frames_seen > 6):
                 self.vehicle_count += 1
                 vehicle.counted = True
+                # update appropriate counter
+                if ((vehicle.last_position[1] > self.divider) and (vehicle.vehicle_dir == 1)):
+                    self.vehicle_RHS += 1
+                elif ((vehicle.last_position[1] < self.divider) and (vehicle.vehicle_dir == -1)):
+                    self.vehicle_LHS += 1
+                    
                 self.log.debug("Counted vehicle #%d (total count=%d)."
                     , vehicle.id, self.vehicle_count)
 
@@ -195,9 +203,15 @@ class VehicleCounter(object):
         if output_image is not None:
             for vehicle in self.vehicles:
                 vehicle.draw(output_image)
-
-            cv2.putText(output_image, ("%02d" % self.vehicle_count), (142, 10)
-                , cv2.FONT_HERSHEY_PLAIN, 1, (127, 255, 255), 1)
+                
+            # LHS
+#            cv2.putText(output_image, ("LH Lane: %02d" % self.vehicle_count), (115, 12)
+#                , cv2.FONT_HERSHEY_PLAIN, 1, (127, 255, 255), 2)
+            cv2.putText(output_image, ("LH Lane: %02d" % self.vehicle_LHS), (12, 56)
+                , cv2.FONT_HERSHEY_PLAIN, 1.2, (127,255, 255), 2)
+            # RHS
+            cv2.putText(output_image, ("RH Lane: %02d" % self.vehicle_RHS), (216, 56)
+                , cv2.FONT_HERSHEY_PLAIN, 1.2, (127, 255, 255), 2)
 
         # Remove vehicles that have not been seen long enough
         removed = [ v.id for v in self.vehicles
@@ -212,7 +226,7 @@ class VehicleCounter(object):
 # ============================================================================
 
 # Video source
-inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201709141107.mp4'
+inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201709141416.mp4'
 #inputFile = '/Users/datascience9/Veh Detection/TFL API/625_201708101116.mp4'
 camera = re.match(r".*/(\d+)_.*", inputFile)
 camera = camera.group(1)
