@@ -22,7 +22,7 @@ import os
 loc = os.path.abspath('')
 
 # Video source
-inputFile = loc+'/trafficCounter/inputs/625_201709301058.mp4'
+inputFile = loc+'/inputs/625_201709280946.mp4'
 
 # for testing
 tracked_blobs = []
@@ -237,13 +237,13 @@ cap = cv2.VideoCapture(inputFile)
 
 # get list of background files
 f = []
-for (_, _, filenames) in walk(loc+"/trafficCounter/backgrounds/"):
+for (_, _, filenames) in walk(loc+"/backgrounds/"):
     f.extend(filenames)
     break
 
 # if background exists for camera: import, else avg will be built on fly
 if camera+"_bg.jpg" in f:
-    bg = loc+"/trafficCounter/backgrounds/"+camera+"_bg.jpg"
+    bg = loc+"/backgrounds/"+camera+"_bg.jpg"
     default_bg = cv2.imread(bg)
     default_bg = cv2.cvtColor(default_bg, cv2.COLOR_BGR2HSV)
     (_,avgSat,default_bg) = cv2.split(default_bg)
@@ -282,8 +282,13 @@ SMOOTH = max(2,int(round((CONTOUR_WIDTH**0.5)/2,0)))
 LINE_THICKNESS = 1
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = loc+'/trafficCounter/outputs/'+camera+'_output.mp4'
+out = loc+'/outputs/'+camera+'_output.mp4'
 out = cv2.VideoWriter(out, fourcc, 20, (frame_w, frame_h))
+
+outblob = loc+'/outputs/'+camera+'_outblob.mp4'
+diffop = loc+'/outputs/'+camera+'_outdiff.mp4'
+outblob = cv2.VideoWriter(outblob, fourcc, 20, (frame_w, frame_h))
+diffop = cv2.VideoWriter(diffop, fourcc, 20, (frame_w, frame_h))
 
 # A list of "tracked blobs".
 blobs = []
@@ -329,9 +334,10 @@ while ret:
         cv2.accumulateWeighted(grayFrame, avg, def_wt)
         
         # export averaged background for use in next video feed run
-        if frame_no > int(total_frames * 0.975):
+        #if frame_no > int(total_frames * 0.975):
+        if frame_no > int(200):
             grayOp = cv2.cvtColor(cv2.convertScaleAbs(avg), cv2.COLOR_GRAY2BGR)
-            backOut = loc+"/trafficCounter/backgrounds/"+camera+"_bg.jpg"
+            backOut = loc+"/backgrounds/"+camera+"_bg.jpg"
             cv2.imwrite(backOut, grayOp)
         
         # Compute the grayscale difference between the current grayscale frame and
@@ -339,6 +345,9 @@ while ret:
         differenceFrame = cv2.absdiff(grayFrame, cv2.convertScaleAbs(avg))
         # blur the difference image
         differenceFrame = cv2.GaussianBlur(differenceFrame, (5, 5), 0)
+#        cv2.imshow("difference", differenceFrame)
+        diffout = cv2.cvtColor(differenceFrame, cv2.COLOR_GRAY2BGR)
+        diffop.write(diffout)
 
         # get estimated otsu threshold level
         retval, _ = cv2.threshold(differenceFrame, 0, 255,
@@ -370,6 +379,9 @@ while ret:
         
         # apply mask
         thresholdImage = cv2.bitwise_and(thresholdImage, thresholdImage, mask = mask)
+#        cv2.imshow("threshold", thresholdImage)
+        threshout = cv2.cvtColor(thresholdImage, cv2.COLOR_GRAY2BGR)
+        outblob.write(threshout)
         
         # Find contours aka blobs in the threshold image.
         _, contours, hierarchy = cv2.findContours(thresholdImage, 
